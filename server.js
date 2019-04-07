@@ -35,22 +35,7 @@ app.post('/webhook', line.middleware(config), (req, res) => {
     });
 });
 
-function sendMail2Operator(event, profile, buf, cb) {
-  const msg = {
-    to: mailTo,
-    from: mailFrom,
-    subject: `${profile.displayName} ${event.timestamp}`,
-    text: 'Sample',
-    attachments: [
-      {
-        content: buf.toString('base64'),
-        filename: `${profile.displayName}-${event.source.userId}-${event.timestamp}.jpg`,
-        type: 'image/jpeg',
-        disposition: 'attachment'
-      },
-    ],
-  };
-
+function sendMail(msg, cb) {
   sgMail.send(msg, false, function (err, res) {
     console.log(res);
     if (err) {
@@ -65,41 +50,65 @@ function sendMail2Operator(event, profile, buf, cb) {
 
 // event handler
 function handleEvent(event) {
-  if (
-    event.type === 'message'
-    && event.message.type === 'image'
-    && event.message.contentProvider.type === 'line'
-  ){
+  if (event.type === 'message') {
     axios.get(`https://api.line.me/v2/bot/profile/${event.source.userId}`, {
       headers: {
         'Authorization': 'Bearer ' + config.channelAccessToken,
       }
     }).then(profileResponse => {
       console.log(profileResponse.data);
-      const member = profileResponse.data;
-      axios.get(`https://api.line.me/v2/bot/message/${event.message.id}/content`, {
-          responseType: 'arraybuffer',
-          headers: {
-            'Authorization': 'Bearer ' + config.channelAccessToken,
-          }
-      }).then(response => {
-        const buf = new Buffer.from(response.data);
-        if (buf.length > 10000000) {
-          console.error("img too large");
-          const str = { type: 'text', text: `失敗: 画像サイズが大きすぎます。` };
-          return client.replyMessage(event.replyToken, str);
-        } else {
-          sendMail2Operator(event, member, buf, function (err) {
-            if (err) {
-              const str = { type: 'text', text: `失敗: メール送信失敗。管理者に問い合わせてください。` };
-              return client.replyMessage(event.replyToken, str);
-            } else {
-              const str = { type: 'text', text: `成功: 画像を受け付けました。` };
-              return client.replyMessage(event.replyToken, str);
+      const msg = {
+        to: mailTo,
+        from: mailFrom,
+        subject: `${profileResponse.data.displayName} ${event.timestamp}`,
+        text: 'Sample',
+      };
+      if (
+        event.message.type === 'image'
+        && event.message.contentProvider.type === 'line'
+      ) {
+        axios.get(`https://api.line.me/v2/bot/message/${event.message.id}/content`, {
+            responseType: 'arraybuffer',
+            headers: {
+              'Authorization': 'Bearer ' + config.channelAccessToken,
             }
-          });
-        }
-      });
+        }).then(response => {
+          const buf = new Buffer.from(response.data);
+          if (buf.length > 10000000) {
+            console.error("img too large");
+            const str = { type: 'text', text: `失敗: 画像サイズが大きすぎます。` };
+            return client.replyMessage(event.replyToken, str);
+          } else {
+            msg.attachments = [{
+              content: buf.toString('base64'),
+              filename: `${profileResponse.data.displayName}-${event.source.userId}-${event.timestamp}.jpg`,
+              type: 'image/jpeg',
+              disposition: 'attachment'
+            }];
+            sendMail(msg, function (err) {
+              if (err) {
+                const str = { type: 'text', text: `失敗: メール送信失敗。管理者に問い合わせてください。` };
+                return client.replyMessage(event.replyToken, str);
+              } else {
+                const str = { type: 'text', text: `成功: 画像を受け付けました。` };
+                return client.replyMessage(event.replyToken, str);
+              }
+            });
+          }
+        });
+      } else if(event.message.type === 'text') {
+        const echo = { type: 'text', text: event.message.text };
+        msg.text = event.message.text;
+        sendMail(msg, function (err) {
+          if (err) {
+            const str = { type: 'text', text: `失敗: メール送信失敗。管理者に問い合わせてください。` };
+            return client.replyMessage(event.replyToken, str);
+          } else {
+            const str = { type: 'text', text: `成功: メッセージを受け付けました。` };
+            return client.replyMessage(event.replyToken, str);
+          }
+        });
+      }
     });
   }
 
@@ -107,10 +116,6 @@ function handleEvent(event) {
     // ignore non-text-message event
     return Promise.resolve(null);
   }
-
-  const echo = { type: 'text', text: event.message.text };
-
-  return client.replyMessage(event.replyToken, echo);
 }
 
 app.listen(port, () => {
